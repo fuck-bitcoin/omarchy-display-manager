@@ -63,7 +63,7 @@ each release. Users still choose when to update their installed copy.
 ## Use
 
 1. Select a display by clicking its canvas tile or selector.
-2. Drag tiles to match the physical arrangement. Nearby edges snap together when you release the tile. Each extended display must share an edge with another display along a path to the rest of the desktop. A staggered layout works wherever the edges touch.
+2. Drag tiles to match the physical arrangement. Release a tile near an edge or over the side of another display to snap them together. Each extended display must share an edge with another display along a path to the rest of the desktop. A staggered layout works wherever the edges touch.
 3. Click **Apply**. If the result is usable, click **Keep changes** within 15
    seconds; otherwise choose **Revert** or wait for automatic recovery.
 4. Kept changes are saved as the automatic `Default` profile for the connected

@@ -120,26 +120,68 @@ function placeDisplay(displays, index, x, y, tolerance) {
   var result = clone(displays), moved = result[index]
   if (!isExtended(moved)) return result
   var movedSize = logicalSize(moved)
+  var anchors = result.filter(function(d) { return d !== moved && isExtended(d) })
   var best = null
+  var coveredArea = 0, scaleX = 1, scaleY = 1
+  var slideX = [x], slideY = [y]
 
-  function consider(anchor, cx, cy) {
-    var distance = Math.abs(cx - x) + Math.abs(cy - y)
-    if (distance > tolerance) return
-    moved.x = cx
-    moved.y = cy
-    if (!sharesEdge(moved, anchor) || result.some(function(d) { return d !== moved && overlap(moved, d) })) return
-    var connected = isConnected(result)
-    if (!best || (connected && !best.connected) || (connected === best.connected && distance < best.distance))
-      best = { x: cx, y: cy, distance: distance, connected: connected }
+  anchors.forEach(function(anchor) {
+    var size = logicalSize(anchor)
+    var width = Math.min(x + movedSize.width, anchor.x + size.width) - Math.max(x, anchor.x)
+    var height = Math.min(y + movedSize.height, anchor.y + size.height) - Math.max(y, anchor.y)
+    if (width > 0 && height > 0 && width * height > coveredArea) {
+      coveredArea = width * height
+      // Measure the direction from the tile it covers most in proportion to
+      // both tiles. Right of center on a wide screen should still mean right.
+      scaleX = size.width + movedSize.width
+      scaleY = size.height + movedSize.height
+    }
+    // Along a blocked edge the nearest free position starts or ends at
+    // another display boundary.
+    slideX.push(anchor.x - movedSize.width, anchor.x + size.width)
+    slideY.push(anchor.y - movedSize.height, anchor.y + size.height)
+  })
+
+  function distance(dx, dy) {
+    return (dx / scaleX) * (dx / scaleX) + (dy / scaleY) * (dy / scaleY)
   }
 
-  result.forEach(function(anchor) {
-    if (anchor === moved || !isExtended(anchor)) return
+  function consider(anchor, cx, cy) {
+    if (!coveredArea && Math.abs(cx - x) + Math.abs(cy - y) > tolerance) return
+    moved.x = cx
+    moved.y = cy
+    if (!sharesEdge(moved, anchor) || anchors.some(function(d) { return overlap(moved, d) })) return
+    var connected = isConnected(result)
+    if (best && best.connected && !connected) return
+    var score = distance(cx - x, cy - y)
+    var fromStart = distance(cx - displays[index].x, cy - displays[index].y)
+    if (!best || connected !== best.connected || score < best.score
+        || (score === best.score && fromStart < best.fromStart))
+      best = { x: cx, y: cy, score: score, fromStart: fromStart, connected: connected }
+  }
+
+  anchors.forEach(function(anchor) {
     var size = logicalSize(anchor)
-    consider(anchor, anchor.x - movedSize.width, y)
-    consider(anchor, anchor.x + size.width, y)
-    consider(anchor, x, anchor.y - movedSize.height)
-    consider(anchor, x, anchor.y + size.height)
+    var left = anchor.x - movedSize.width, right = anchor.x + size.width
+    var top = anchor.y - movedSize.height, bottom = anchor.y + size.height
+    if (!coveredArea) {
+      consider(anchor, left, y)
+      consider(anchor, right, y)
+      consider(anchor, x, top)
+      consider(anchor, x, bottom)
+      return
+    }
+    // A positive-length shared edge excludes corner-only contact.
+    slideY.forEach(function(offset) {
+      var cy = Math.max(top + 1, Math.min(bottom - 1, offset))
+      consider(anchor, left, cy)
+      consider(anchor, right, cy)
+    })
+    slideX.forEach(function(offset) {
+      var cx = Math.max(left + 1, Math.min(right - 1, offset))
+      consider(anchor, cx, top)
+      consider(anchor, cx, bottom)
+    })
   })
   moved.x = best ? best.x : x
   moved.y = best ? best.y : y

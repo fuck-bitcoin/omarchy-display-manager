@@ -36,10 +36,13 @@ const external = { name: "external", mode: "1920x1080@60", scale: 1, transform: 
 const stacked = [laptop, external]
 assert.strictEqual(context.isConnected(stacked), false)
 
-// Drop with either a small gap or overlap. Keep the stagger along each seam.
+// Near-misses and deep overlaps should land on the intended side, preserving
+// the offset along the edge even when the screens have different scales.
 for (const [x, y, expectedX, expectedY] of [
   [0, 1019, 0, 1000], [0, 990, 0, 1000], [0, -1099, 0, -1080],
-  [1818, 33, 1799, 33], [-1740, -33, -1721, -33]
+  [1818, 33, 1799, 33], [-1740, -33, -1721, -33],
+  [1299, 31, 1799, 31], [-1171, 20, -1721, 20],
+  [71, 665, 71, 1000], [7, -700, 7, -1080]
 ]) {
   const placed = context.placeDisplay(stacked, 1, x, y, 24)
   assert.strictEqual(placed[1].x, expectedX)
@@ -65,10 +68,36 @@ assert.strictEqual(context.isConnected([...grid, rotated, ...excluded]), true)
 assert.strictEqual(context.isConnected([rotated, { ...rotated, x: 1 },
   { ...rotated, x: 0, disabled: true }]), false)
 
-// Snapping to the nearest screen must not create an overlap with a third.
-const three = [grid[0], { ...grid[0], x: 160 }, { ...grid[0], y: 100 }]
-const blocked = context.placeDisplay(three, 2, 101, 0, 5)
-assert.strictEqual(blocked[2].x, 101)
-assert.strictEqual(context.hasOverlap(blocked), true)
+// A rotated tile is 200 × 100 logical pixels. Place it flush against the
+// left edge using its rotated width even when it is mostly inside the laptop.
+const portraitDrop = context.placeDisplay([laptop, rotated], 1, 125, 320, 0)
+assert.deepStrictEqual([portraitDrop[1].x, portraitDrop[1].y], [-1, 320])
+assert.strictEqual(context.hasOverlap(portraitDrop), false)
+
+// The desired right edge is partially occupied. Slide along it to the nearest
+// open segment so neither fixed output moves when releasing the third tile.
+const big = { mode: "300x300@60", scale: 1, transform: 0, x: 0, y: 0 }
+const neighbor = { ...grid[0], x: 300, y: 0 }
+const third = { ...grid[0], x: 0, y: 300 }
+const corner = [big, neighbor, third]
+const slotted = context.placeDisplay(corner, 2, 240, 70, 5)
+assert.deepStrictEqual([slotted[2].x, slotted[2].y], [300, 100])
+assert.deepStrictEqual(JSON.parse(JSON.stringify(slotted.slice(0, 2))), [big, neighbor])
+assert.strictEqual(context.hasOverlap(slotted), false)
+assert.strictEqual(context.isConnected(slotted), true)
+
+// A tile aimed at the right side of an ultrawide should go to its right,
+// even when a vertical edge correction would be shorter in raw pixels.
+const wide = { ...big, mode: "2400x600@60" }
+const inside = context.placeDisplay([wide, third], 1, 1900, 210, 5)
+assert.deepStrictEqual([inside[1].x, inside[1].y], [2400, 210])
+
+// Covering an identical tile completely is ambiguous, but the result must be
+// usable. Dropping it again at the returned coordinates should be a no-op.
+const centered = context.placeDisplay([grid[0], third], 1, 0, 0, 0)
+assert.strictEqual(context.hasOverlap(centered), false)
+assert.strictEqual(context.isConnected(centered), true)
+const settled = context.placeDisplay(centered, 1, centered[1].x, centered[1].y, 0)
+assert.deepStrictEqual(settled, centered)
 
 console.log("DisplayModel tests passed")

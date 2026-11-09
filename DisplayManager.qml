@@ -315,8 +315,8 @@ Panel {
                 required property int index
                 property var logical: DisplayModel.logicalSize(modelData)
                 visible: !modelData.disabled
-                x: Style.space(16) + (modelData.x - layoutCanvas.minX) * layoutCanvas.zoom
-                y: Style.space(16) + (modelData.y - layoutCanvas.minY) * layoutCanvas.zoom
+                x: Style.space(16) + (modelData.x - layoutCanvas.minX) * layoutCanvas.zoom + dragOffset.x
+                y: Style.space(16) + (modelData.y - layoutCanvas.minY) * layoutCanvas.zoom + dragOffset.y
                 width: logical.width * layoutCanvas.zoom
                 height: logical.height * layoutCanvas.zoom
                 radius: Style.cornerRadius
@@ -338,16 +338,25 @@ Panel {
                   font.bold: true
                   horizontalAlignment: Text.AlignHCenter
                 }
+                // Keep the tile bound to the draft even when a drop snaps it
+                // back to the exact position it had before the drag.
+                Item {
+                  id: dragOffset
+                  parent: layoutCanvas
+                  function reset() { x = 0; y = 0 }
+                }
                 MouseArea {
                   anchors.fill: parent
-                  drag.target: modelData.mirror ? null : parent
+                  drag.target: modelData.mirror ? null : dragOffset
                   drag.axis: Drag.XAndYAxis
                   cursorShape: modelData.mirror ? Qt.ArrowCursor : Qt.SizeAllCursor
                   onPressed: root.selectedIndex = index
+                  onCanceled: dragOffset.reset()
                   onReleased: {
                     if (!drag.active) return
-                    var x = Math.round((parent.x - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minX)
-                    var y = Math.round((parent.y - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minY)
+                    var x = modelData.x + Math.round(dragOffset.x / layoutCanvas.zoom)
+                    var y = modelData.y + Math.round(dragOffset.y / layoutCanvas.zoom)
+                    dragOffset.reset()
                     root.displays = DisplayModel.placeDisplay(root.displays, index, x, y, Style.space(10) / layoutCanvas.zoom)
                   }
                 }
@@ -358,7 +367,7 @@ Panel {
           Text {
             visible: !root.validLayout
             text: root.activeCount === 0 ? "At least one display must stay enabled."
-                : root.overlapping ? "Displays cannot overlap. Drag them apart before applying."
+                : root.overlapping ? "Drag the overlapping display onto the side where it belongs."
                 : "Drag displays edge to edge so the pointer can reach every screen."
             color: Color.urgent
             font.family: root.bar.fontFamily
