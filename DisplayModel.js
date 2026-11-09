@@ -93,6 +93,59 @@ function hasOverlap(displays) {
   return false
 }
 
+function isExtended(display) { return !display.disabled && !display.mirror }
+
+function sharesEdge(a, b) {
+  var as = logicalSize(a), bs = logicalSize(b)
+  return ((a.x + as.width === b.x || b.x + bs.width === a.x)
+          && Math.min(a.y + as.height, b.y + bs.height) > Math.max(a.y, b.y))
+      || ((a.y + as.height === b.y || b.y + bs.height === a.y)
+          && Math.min(a.x + as.width, b.x + bs.width) > Math.max(a.x, b.x))
+}
+
+function isConnected(displays) {
+  var screens = displays.filter(isExtended)
+  if (!screens.length) return false
+  var reached = [screens[0]]
+  for (var i = 0; i < reached.length; i++)
+    screens.forEach(function(screen) {
+      if (reached.indexOf(screen) < 0 && sharesEdge(reached[i], screen)) reached.push(screen)
+    })
+  return reached.length === screens.length
+}
+
+// Only move the dragged output. Keep the offset along the shared edge so
+// partially staggered and differently sized screens can match the user's desk.
+function placeDisplay(displays, index, x, y, tolerance) {
+  var result = clone(displays), moved = result[index]
+  if (!isExtended(moved)) return result
+  var movedSize = logicalSize(moved)
+  var best = null
+
+  function consider(anchor, cx, cy) {
+    var distance = Math.abs(cx - x) + Math.abs(cy - y)
+    if (distance > tolerance) return
+    moved.x = cx
+    moved.y = cy
+    if (!sharesEdge(moved, anchor) || result.some(function(d) { return d !== moved && overlap(moved, d) })) return
+    var connected = isConnected(result)
+    if (!best || (connected && !best.connected) || (connected === best.connected && distance < best.distance))
+      best = { x: cx, y: cy, distance: distance, connected: connected }
+  }
+
+  result.forEach(function(anchor) {
+    if (anchor === moved || !isExtended(anchor)) return
+    var size = logicalSize(anchor)
+    consider(anchor, anchor.x - movedSize.width, y)
+    consider(anchor, anchor.x + size.width, y)
+    consider(anchor, x, anchor.y - movedSize.height)
+    consider(anchor, x, anchor.y + size.height)
+  })
+  moved.x = best ? best.x : x
+  moved.y = best ? best.y : y
+  return result
+}
+
 function normalizePositions(displays) {
   var copy = clone(displays), minX = Infinity, minY = Infinity
   copy.forEach(function(d) {

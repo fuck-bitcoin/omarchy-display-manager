@@ -33,9 +33,9 @@ topology() {
   state | jq -c '[.[].fingerprint] | sort | join("::")'
 }
 
-validate_config() {
-  local config=$1
-  jq -e '
+config_validation() {
+  local config=$1 policy=${2:-layout}
+  jq -r --arg policy "$policy" '
     def mode_parts:
       .mode | capture("^(?<width>[0-9]+)x(?<height>[0-9]+)@(?<refresh>[0-9]+(?:[.][0-9]+)?)(?:Hz)?$");
     def logical_rect:
@@ -52,8 +52,22 @@ validate_config() {
            width: (($width / $display.scale) | round),
            height: (($height / $display.scale) | round)}
         end;
+    def shares_edge($a; $b):
+      def overlap($a1; $a2; $b1; $b2): $a1 < $b2 and $b1 < $a2;
+      ((($a.x + $a.width == $b.x) or ($b.x + $b.width == $a.x))
+        and overlap($a.y; $a.y + $a.height; $b.y; $b.y + $b.height))
+      or ((($a.y + $a.height == $b.y) or ($b.y + $b.height == $a.y))
+        and overlap($a.x; $a.x + $a.width; $b.x; $b.x + $b.width));
+    def connected($rects):
+      # Expand the reachable set until no more displays share an edge with it.
+      def neighbors($seen):
+        [range(0; $rects | length) as $i
+         | select(any($seen[]; shares_edge($rects[.]; $rects[$i])))
+         | $i];
+      [0] | until(length == ($rects | length) or (neighbors(.) - . | length) == 0;
+        (. + neighbors(.)) | unique) | length == ($rects | length);
     . as $config
-    | type == "array" and length > 0
+    | if type == "array" and length > 0
     and (map(select(.disabled != true)) | length) > 0
     and ([.[].name] | length) == ([.[].name] | unique | length)
     and all(.[];
@@ -72,8 +86,8 @@ validate_config() {
             or ($target != .name and any($config[];
               .name == $target and .disabled != true and (.mirror // "") == "")))
       )))
-    and ([.[] | select(.disabled != true and (.mirror // "") == "") | logical_rect] as $rects
-      | all(range(0; $rects | length);
+    then [.[] | select(.disabled != true and (.mirror // "") == "") | logical_rect] as $rects
+      | if all(range(0; $rects | length);
           . as $left
           | all(range($left + 1; $rects | length);
             . as $right
@@ -81,14 +95,22 @@ validate_config() {
             ($rects[$left].x >= ($rects[$right].x + $rects[$right].width))
             or (($rects[$left].x + $rects[$left].width) <= $rects[$right].x)
             or ($rects[$left].y >= ($rects[$right].y + $rects[$right].height))
-            or (($rects[$left].y + $rects[$left].height) <= $rects[$right].y))))
-  ' <<<"$config" >/dev/null \
-    || die "Invalid display configuration"
+            or (($rects[$left].y + $rects[$left].height) <= $rects[$right].y)))
+        then if $policy == "snapshot" or connected($rects) then "ok"
+          else "Every extended display must connect to the others along a shared edge" end
+        else "Invalid display configuration" end
+    else "Invalid display configuration" end
+  ' <<<"$config" || return 1
+}
+
+validate_config() {
+  local result
+  result=$(config_validation "$@") || die "Invalid display configuration"
+  [[ $result == ok ]] || die "$result"
 }
 
 apply_config() {
   local config=$1 expression
-  validate_config "$config"
   while IFS= read -r encoded; do
     local row name name_lua
     row=$(base64 -d <<<"$encoded")
@@ -159,6 +181,13 @@ apply_config() {
   [[ -z $mismatch ]] || die "Display hardware rejected the requested setting: $mismatch"
 }
 
+# A snapshot may come from an older profile or another layout editor. Roll it
+# back exactly even when the proposed-layout policy would reject its gaps.
+restore_snapshot() {
+  validate_config "$1" snapshot
+  apply_config "$1"
+}
+
 cancel_rollback() {
   systemctl --user stop omarchy-display-manager-rollback.timer >/dev/null 2>&1 || true
   systemctl --user stop omarchy-display-manager-rollback.service >/dev/null 2>&1 || true
@@ -176,7 +205,7 @@ restore_pending() {
   if [[ -f $pending_file ]]; then
     local snapshot
     snapshot=$(<"$pending_file")
-    apply_config "$snapshot"
+    restore_snapshot "$snapshot"
     rm -f "$pending_file"
   fi
 }
@@ -189,7 +218,7 @@ preview() {
   state >"$snapshot_tmp"
   mv "$snapshot_tmp" "$pending_file"
   if ! apply_error=$(apply_config "$config" 2>&1); then
-    if ! (apply_config "$(<"$pending_file")") >/dev/null 2>&1; then
+    if ! (restore_snapshot "$(<"$pending_file")") >/dev/null 2>&1; then
       die "Preview failed and the previous layout could not be restored; the recovery snapshot remains at $pending_file"
     fi
     rm -f "$pending_file"
@@ -197,7 +226,7 @@ preview() {
     return 1
   fi
   if ! schedule_error=$(schedule_rollback 2>&1); then
-    if ! (apply_config "$(<"$pending_file")") >/dev/null 2>&1; then
+    if ! (restore_snapshot "$(<"$pending_file")") >/dev/null 2>&1; then
       die "Automatic rollback could not be scheduled and the previous layout could not be restored; the recovery snapshot remains at $pending_file"
     fi
     rm -f "$pending_file"
@@ -264,14 +293,23 @@ profiles_apply() {
 
 profiles_match() {
   ensure_profiles
-  local key config name snapshot apply_error
+  local key config name snapshot apply_error validation
   key=$(topology)
   config=$(jq -c --arg key "$key" '[.profiles[] | select(.topology==$key and .automatic==true)][0] // empty' "$profiles_file")
   [[ -n $config ]] || { printf '{"ok":true,"matched":false}\n'; return; }
   name=$(jq -r '.name' <<<"$config")
+  config=$(jq -c '.displays' <<<"$config")
+  validation=$(config_validation "$config") || die "Invalid display configuration"
+  if [[ $validation != ok ]]; then
+    # Older versions could save layouts with gaps. Leave the profile intact
+    # and finish this topology check so the service does not retry every poll.
+    jq -cn --arg name "$name" --arg reason "$validation" \
+      '{ok:true, matched:false, name:$name, reason:$reason}'
+    return
+  fi
   snapshot=$(state)
-  if ! apply_error=$(apply_config "$(jq -c '.displays' <<<"$config")" 2>&1); then
-    if ! (apply_config "$snapshot") >/dev/null 2>&1; then
+  if ! apply_error=$(apply_config "$config" 2>&1); then
+    if ! (restore_snapshot "$snapshot") >/dev/null 2>&1; then
       die "Automatic profile failed and the previous layout could not be restored"
     fi
     printf '%s\n' "$apply_error" >&2

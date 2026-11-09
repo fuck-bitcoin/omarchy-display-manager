@@ -24,7 +24,8 @@ Panel {
 
   readonly property var selectedDisplay: displays.length && selectedIndex < displays.length ? displays[selectedIndex] : null
   readonly property int activeCount: displays.filter(function(d) { return !d.disabled }).length
-  readonly property bool validLayout: activeCount > 0 && !DisplayModel.hasOverlap(displays)
+  readonly property bool overlapping: DisplayModel.hasOverlap(displays)
+  readonly property bool validLayout: activeCount > 0 && !overlapping && DisplayModel.isConnected(displays)
 
   function parseOutput(text) {
     try { return JSON.parse(String(text || "")) } catch (e) { return null }
@@ -316,8 +317,8 @@ Panel {
                 visible: !modelData.disabled
                 x: Style.space(16) + (modelData.x - layoutCanvas.minX) * layoutCanvas.zoom
                 y: Style.space(16) + (modelData.y - layoutCanvas.minY) * layoutCanvas.zoom
-                width: Math.max(Style.space(70), logical.width * layoutCanvas.zoom)
-                height: Math.max(Style.space(44), logical.height * layoutCanvas.zoom)
+                width: logical.width * layoutCanvas.zoom
+                height: logical.height * layoutCanvas.zoom
                 radius: Style.cornerRadius
                 color: index === root.selectedIndex ? Style.selectedFillFor(root.barForeground, Color.accent) : Style.hoverFillFor(root.barForeground, Color.accent)
                 border.color: index === root.selectedIndex ? Color.accent : root.barForeground
@@ -325,7 +326,11 @@ Panel {
                 opacity: modelData.mirror ? 0.65 : 1
 
                 Text {
-                  anchors.centerIn: parent
+                  anchors.fill: parent
+                  clip: true
+                  textFormat: Text.PlainText
+                  elide: Text.ElideRight
+                  verticalAlignment: Text.AlignVCenter
                   text: (index + 1) + "  " + modelData.name + (modelData.mirror ? "\nMirrors " + modelData.mirror : "")
                   color: root.barForeground
                   font.family: root.bar.fontFamily
@@ -335,15 +340,15 @@ Panel {
                 }
                 MouseArea {
                   anchors.fill: parent
-                  drag.target: parent
+                  drag.target: modelData.mirror ? null : parent
                   drag.axis: Drag.XAndYAxis
-                  cursorShape: Qt.SizeAllCursor
+                  cursorShape: modelData.mirror ? Qt.ArrowCursor : Qt.SizeAllCursor
                   onPressed: root.selectedIndex = index
                   onReleased: {
-                    var copy = DisplayModel.clone(root.displays)
-                    copy[index].x = Math.round((parent.x - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minX)
-                    copy[index].y = Math.round((parent.y - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minY)
-                    root.displays = copy
+                    if (!drag.active) return
+                    var x = Math.round((parent.x - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minX)
+                    var y = Math.round((parent.y - Style.space(16)) / layoutCanvas.zoom + layoutCanvas.minY)
+                    root.displays = DisplayModel.placeDisplay(root.displays, index, x, y, Style.space(10) / layoutCanvas.zoom)
                   }
                 }
               }
@@ -352,7 +357,9 @@ Panel {
 
           Text {
             visible: !root.validLayout
-            text: root.activeCount === 0 ? "At least one display must stay enabled." : "Displays cannot overlap. Drag them apart before applying."
+            text: root.activeCount === 0 ? "At least one display must stay enabled."
+                : root.overlapping ? "Displays cannot overlap. Drag them apart before applying."
+                : "Drag displays edge to edge so the pointer can reach every screen."
             color: Color.urgent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption

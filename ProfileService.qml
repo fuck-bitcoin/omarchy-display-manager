@@ -45,6 +45,7 @@ Item {
           var result = JSON.parse(String(text || "{}"))
           matchProc.outputValid = result.ok === true
           if (result.matched) Quickshell.execDetached(["omarchy-notification-send", "-g", "󰍺", "Display profile applied", result.name])
+          else if (result.reason) console.warn("Skipped display profile " + result.name + ": " + result.reason)
         } catch (e) {}
       }
     }

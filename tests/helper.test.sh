@@ -125,11 +125,58 @@ state=$($helper state)
 jq -e 'length == 2 and .[0].fingerprint == "BOE|Panel|ABC" and .[1].scale == 2' <<<"$state" >/dev/null
 [[ $($helper topology) == '"BOE|Panel|ABC::Dell|U2723QE|XYZ"' ]]
 
-config=$(jq -c '[.[0] + {x:3840,transform:1,mode:"1920x1200@60.001Hz"}, .[1] + {x:0}]' <<<"$state")
+# Even a one-pixel gap or a corner-only contact breaks pointer traversal.
+# Rejected previews must fail before mutating the live layout.
+for candidate in \
+  "$(jq -c '.[1].x += 1' <<<"$state")" \
+  "$(jq -c '.[1] += {x:199,y:1219}' <<<"$state")" \
+  "$(jq -c '.[1].y = 1200' <<<"$state")"; do
+  if error=$($helper preview "$candidate" 2>&1); then exit 1; fi
+  jq -e '.error | contains("shared edge")' <<<"$error" >/dev/null
+done
+[[ ! -s $TEST_CALLS ]]
+
+# Each display must reach the entire group, even when every display touches
+# at least one neighbor. Disabled and mirrored outputs cannot bridge a gap.
+six=$(jq -c '.[0] as $panel | [range(6) as $i |
+  $panel + {name:("D" + ($i|tostring)), x:(($i%3)*1920), y:(if $i<3 then -1200 else 0 end)}]' <<<"$state")
+$helper profiles-save Grid "$six" false >/dev/null
+for filter in \
+  'map(if .y == 0 then .y = 1 else . end)' \
+  '.[1].disabled=true | .[4].disabled=true' \
+  '.[1].mirror="D0" | .[4].mirror="D0"'; do
+  island=$(jq -c "$filter" <<<"$six")
+  if $helper profiles-save Islands "$island" false >/dev/null 2>&1; then exit 1; fi
+done
+$helper profiles-delete Grid >/dev/null
+
+# Legacy profiles with gaps cannot be activated or overwrite the user's
+# current layout. A preview started FROM such a live layout can still revert.
+store=$XDG_STATE_HOME/omarchy-display-manager/profiles.json
+disconnected=$(jq -c '.[1].x += 19' <<<"$state")
+jq --argjson config "$disconnected" --arg key "$($helper topology)" \
+  '.profiles = [{name:"Legacy", automatic:true, topology:$key, displays:$config}]' \
+  "$store" >"$fixture_dir/legacy.json"
+mv "$fixture_dir/legacy.json" "$store"
+$helper profiles-match | jq -e '
+  .ok == true and .matched == false and .name == "Legacy" and (.reason | contains("shared edge"))' >/dev/null
+$helper profiles-list | jq -e --argjson config "$disconnected" '
+  .profiles[0].automatic == true and .profiles[0].displays == $config' >/dev/null
+[[ ! -s $TEST_CALLS ]]
+$helper profiles-delete Legacy >/dev/null
+
+jq '.[1].x += 19' "$TEST_MONITORS" >"$fixture_dir/gapped.json"
+mv "$fixture_dir/gapped.json" "$TEST_MONITORS"
+$helper preview "$state" >/dev/null
+$helper rollback >/dev/null
+[[ $($helper state) == "$disconnected" ]]
+[[ ! -e $XDG_STATE_HOME/omarchy-display-manager/pending.json ]]
+
+config=$(jq -c '[.[0] + {x:1920,transform:1,mode:"1920x1200@60.001Hz"}, .[1] + {x:0}]' <<<"$state")
 $helper preview "$config" >/dev/null
-grep -q '^hl.monitor({ output = "eDP-1", mode = "1920x1200@60.001", position = "3840x0", scale = 1, transform = 1 })$' "$TEST_CALLS"
+grep -q '^hl.monitor({ output = "eDP-1", mode = "1920x1200@60.001", position = "1920x0", scale = 1, transform = 1 })$' "$TEST_CALLS"
 grep -q 'display-manager rollback$' "$TEST_SYSTEMD_CALLS"
-$helper state | jq -e '.[0].x == 3840 and .[0].transform == 1 and .[1].x == 0' >/dev/null
+$helper state | jq -e '.[0].x == 1920 and .[0].transform == 1 and .[1].x == 0' >/dev/null
 $helper confirm >/dev/null
 
 $helper profiles-save Default "$config" true >/dev/null
@@ -161,7 +208,7 @@ $helper profiles-delete Default | jq -e '.profiles | length == 0' >/dev/null
 for invalid in \
   '[]' \
   "$(jq -c '.[1].name = .[0].name' <<<"$second_state")" \
-  "$(jq -c '.[1].x = 4000' <<<"$second_state")" \
+  "$(jq -c '.[1].x = 1000' <<<"$second_state")" \
   "$(jq -c '.[0].mirror = .[0].name' <<<"$second_state")" \
   "$(jq -c '.[0].mirror = "missing"' <<<"$second_state")"; do
   if $helper preview "$invalid" >/dev/null 2>&1; then
@@ -170,7 +217,7 @@ for invalid in \
   fi
 done
 
-rejected=$(jq -c '.[0].x += 100 | .[0].transform = 3' <<<"$second_state")
+rejected=$(jq -c '.[0].y += 100 | .[0].transform = 3' <<<"$second_state")
 printf '2\n' >"$TEST_IGNORE_EVALS"
 if $helper preview "$rejected" >/dev/null 2>&1; then
   echo "Expected unapplied position and transform to fail verification" >&2
