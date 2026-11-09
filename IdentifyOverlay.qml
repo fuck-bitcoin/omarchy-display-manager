@@ -27,6 +27,8 @@ Item {
       screen: modelData
       visible: root.opened
       color: "transparent"
+      // Identify labels are visual only. Keep pointer input on the editor below.
+      mask: Region {}
       exclusionMode: ExclusionMode.Ignore
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None

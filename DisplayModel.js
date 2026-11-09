@@ -116,14 +116,16 @@ function isConnected(displays) {
 
 // Only move the dragged output. Keep the offset along the shared edge so
 // partially staggered and differently sized screens can match the user's desk.
-function placeDisplay(displays, index, x, y, tolerance) {
+function placeDisplay(displays, index, x, y) {
   var result = clone(displays), moved = result[index]
   if (!isExtended(moved)) return result
   var movedSize = logicalSize(moved)
   var anchors = result.filter(function(d) { return d !== moved && isExtended(d) })
   var best = null
   var coveredArea = 0, scaleX = 1, scaleY = 1
-  var slideX = [x], slideY = [y]
+  // Include the starting offsets so a bridge between groups of displays
+  // can stay connected if the requested side has no room for it.
+  var slideX = [x, moved.x], slideY = [y, moved.y]
 
   anchors.forEach(function(anchor) {
     var size = logicalSize(anchor)
@@ -147,7 +149,6 @@ function placeDisplay(displays, index, x, y, tolerance) {
   }
 
   function consider(anchor, cx, cy) {
-    if (!coveredArea && Math.abs(cx - x) + Math.abs(cy - y) > tolerance) return
     moved.x = cx
     moved.y = cy
     if (!sharesEdge(moved, anchor) || anchors.some(function(d) { return overlap(moved, d) })) return
@@ -164,25 +165,26 @@ function placeDisplay(displays, index, x, y, tolerance) {
     var size = logicalSize(anchor)
     var left = anchor.x - movedSize.width, right = anchor.x + size.width
     var top = anchor.y - movedSize.height, bottom = anchor.y + size.height
-    if (!coveredArea) {
-      consider(anchor, left, y)
-      consider(anchor, right, y)
-      consider(anchor, x, top)
-      consider(anchor, x, bottom)
-      return
-    }
-    // A positive-length shared edge excludes corner-only contact.
+    // A diagonal drop beyond the end of an edge would otherwise leave a
+    // one-pixel crossing. Bring a quarter of the smaller edge into reach.
+    // Along a side, preserve the stagger under the pointer.
+    var verticalSpan = y <= top || y >= bottom ? Math.ceil(Math.min(size.height, movedSize.height) / 4) : 1
+    var horizontalSpan = x <= left || x >= right ? Math.ceil(Math.min(size.width, movedSize.width) / 4) : 1
     slideY.forEach(function(offset) {
-      var cy = Math.max(top + 1, Math.min(bottom - 1, offset))
+      var cy = Math.max(top + verticalSpan, Math.min(bottom - verticalSpan, offset))
       consider(anchor, left, cy)
       consider(anchor, right, cy)
     })
     slideX.forEach(function(offset) {
-      var cx = Math.max(left + 1, Math.min(right - 1, offset))
+      var cx = Math.max(left + horizontalSpan, Math.min(right - horizontalSpan, offset))
       consider(anchor, cx, top)
       consider(anchor, cx, bottom)
     })
   })
+  if ((!best || !best.connected) && anchors.length) {
+    var start = displays[index]
+    anchors.forEach(function(anchor) { consider(anchor, start.x, start.y) })
+  }
   moved.x = best ? best.x : x
   moved.y = best ? best.y : y
   return result

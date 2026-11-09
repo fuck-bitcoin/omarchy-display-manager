@@ -294,17 +294,20 @@ Panel {
             border.color: root.validLayout ? Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.18) : Color.urgent
             border.width: 1
 
+            property var dragSource: null
+            readonly property var shownLayout: dragSource && dragSource.snappedLayout ? dragSource.snappedLayout : root.displays
+
             property real minX: {
-              var v = Infinity; root.displays.forEach(function(d) { if (!d.disabled && !d.mirror) v = Math.min(v, d.x) }); return isFinite(v) ? v : 0
+              var v = Infinity; shownLayout.forEach(function(d) { if (!d.disabled && !d.mirror) v = Math.min(v, d.x) }); return isFinite(v) ? v : 0
             }
             property real minY: {
-              var v = Infinity; root.displays.forEach(function(d) { if (!d.disabled && !d.mirror) v = Math.min(v, d.y) }); return isFinite(v) ? v : 0
+              var v = Infinity; shownLayout.forEach(function(d) { if (!d.disabled && !d.mirror) v = Math.min(v, d.y) }); return isFinite(v) ? v : 0
             }
             property real maxX: {
-              var v = 1; root.displays.forEach(function(d) { var s=DisplayModel.logicalSize(d); if (!d.disabled && !d.mirror) v=Math.max(v,d.x+s.width) }); return v
+              var v = 1; shownLayout.forEach(function(d) { var s=DisplayModel.logicalSize(d); if (!d.disabled && !d.mirror) v=Math.max(v,d.x+s.width) }); return v
             }
             property real maxY: {
-              var v = 1; root.displays.forEach(function(d) { var s=DisplayModel.logicalSize(d); if (!d.disabled && !d.mirror) v=Math.max(v,d.y+s.height) }); return v
+              var v = 1; shownLayout.forEach(function(d) { var s=DisplayModel.logicalSize(d); if (!d.disabled && !d.mirror) v=Math.max(v,d.y+s.height) }); return v
             }
             property real zoom: Math.min((width - Style.space(32)) / Math.max(1, maxX-minX), (height - Style.space(32)) / Math.max(1, maxY-minY))
 
@@ -313,10 +316,11 @@ Panel {
               Rectangle {
                 required property var modelData
                 required property int index
+                property var placed: layoutCanvas.shownLayout[index] || modelData
                 property var logical: DisplayModel.logicalSize(modelData)
                 visible: !modelData.disabled
-                x: Style.space(16) + (modelData.x - layoutCanvas.minX) * layoutCanvas.zoom + dragOffset.x
-                y: Style.space(16) + (modelData.y - layoutCanvas.minY) * layoutCanvas.zoom + dragOffset.y
+                x: Style.space(16) + (placed.x - layoutCanvas.minX) * layoutCanvas.zoom
+                y: Style.space(16) + (placed.y - layoutCanvas.minY) * layoutCanvas.zoom
                 width: logical.width * layoutCanvas.zoom
                 height: logical.height * layoutCanvas.zoom
                 radius: Style.cornerRadius
@@ -346,18 +350,33 @@ Panel {
                   function reset() { x = 0; y = 0 }
                 }
                 MouseArea {
+                  id: dragInput
+                  // The map refits the preview while dragging. Interpret pointer
+                  // travel at the zoom where the gesture began.
+                  property real startZoom: 1
+                  readonly property var snappedLayout: drag.active
+                    ? DisplayModel.placeDisplay(root.displays, index,
+                        modelData.x + Math.round(dragOffset.x / startZoom),
+                        modelData.y + Math.round(dragOffset.y / startZoom))
+                    : null
                   anchors.fill: parent
                   drag.target: modelData.mirror ? null : dragOffset
                   drag.axis: Drag.XAndYAxis
                   cursorShape: modelData.mirror ? Qt.ArrowCursor : Qt.SizeAllCursor
-                  onPressed: root.selectedIndex = index
-                  onCanceled: dragOffset.reset()
-                  onReleased: {
-                    if (!drag.active) return
-                    var x = modelData.x + Math.round(dragOffset.x / layoutCanvas.zoom)
-                    var y = modelData.y + Math.round(dragOffset.y / layoutCanvas.zoom)
+                  onPressed: {
+                    root.selectedIndex = index
+                    startZoom = layoutCanvas.zoom
+                    layoutCanvas.dragSource = dragInput
+                  }
+                  onCanceled: {
+                    layoutCanvas.dragSource = null
                     dragOffset.reset()
-                    root.displays = DisplayModel.placeDisplay(root.displays, index, x, y, Style.space(10) / layoutCanvas.zoom)
+                  }
+                  onReleased: {
+                    var placement = snappedLayout
+                    layoutCanvas.dragSource = null
+                    dragOffset.reset()
+                    if (placement) root.displays = placement
                   }
                 }
               }
